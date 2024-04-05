@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,14 +16,28 @@ import (
 	ffmpeg_go "github.com/u2takey/ffmpeg-go"
 )
 
+func estimateBitrate(audio []byte, duration float64) int {
+	size := len(audio)
+	bytesPerSecond := float64(size) / duration
+	bitrateKbps := int(bytesPerSecond * 8 / 1024)
+	minBitrateKbps, maxBitrateKbps := 96, 320
+	if bitrateKbps < minBitrateKbps {
+		bitrateKbps = minBitrateKbps
+	} else if bitrateKbps > maxBitrateKbps {
+		bitrateKbps = maxBitrateKbps
+	}
+	return bitrateKbps
+}
+
 func biliAudioGetter(c *gin.Context) {
 	BV := c.Query("BV")
+	bitrate := c.Query("bitrate")
 	oFormat := c.DefaultQuery("format", "mp3")
-	bitrate := c.DefaultQuery("bitrate", "128k")
 	// check BV, if malformed raise exception
 	url := fmt.Sprintf("https://www.bilibili.com/video/%s", BV)
 
 	var matches []string
+	var duration string
 
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
@@ -40,6 +55,7 @@ func biliAudioGetter(c *gin.Context) {
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(url),
 		chromedp.Sleep(5*time.Second),
+		chromedp.Text(".bpx-player-ctrl-time-duration", &duration),
 	)
 	if err != nil {
 		c.JSON(http.StatusNotAcceptable, gin.H{"msg": "Unable to load load web page"})
@@ -49,7 +65,7 @@ func biliAudioGetter(c *gin.Context) {
 		return
 	}
 
-	fmt.Println(matches[1])
+	// fmt.Println(matches[1])
 
 	res, err := http.Get(matches[1])
 	if err != nil {
@@ -65,6 +81,18 @@ func biliAudioGetter(c *gin.Context) {
 	}
 	iBuffer := bytes.NewBuffer(audio)
 	oBuffer := bytes.NewBuffer(nil)
+
+	if bitrate == "" {
+		durationParts := strings.Split(duration, ":")
+		if len(durationParts) != 2 {
+			c.JSON(http.StatusInternalServerError, gin.H{"msg": "Invalid duration format"})
+			return
+		}
+		minutes, _ := strconv.Atoi(durationParts[0])
+		seconds, _ := strconv.Atoi(durationParts[1])
+		durationSeconds := float64(minutes*60 + seconds)
+		bitrate = fmt.Sprint(estimateBitrate(audio, durationSeconds))
+	}
 
 	err = ffmpeg_go.
 		Input("pipe:", ffmpeg_go.KwArgs{"f": "mp4"}).
