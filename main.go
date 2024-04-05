@@ -20,7 +20,8 @@ func estimateBitrate(audio []byte, duration float64) int {
 	size := len(audio)
 	bytesPerSecond := float64(size) / duration
 	bitrateKbps := int(bytesPerSecond * 8 / 1024)
-	minBitrateKbps, maxBitrateKbps := 96, 320
+	fmt.Println(bitrateKbps)
+	minBitrateKbps, maxBitrateKbps := 128, 320
 	if bitrateKbps < minBitrateKbps {
 		bitrateKbps = minBitrateKbps
 	} else if bitrateKbps > maxBitrateKbps {
@@ -29,8 +30,9 @@ func estimateBitrate(audio []byte, duration float64) int {
 	return bitrateKbps
 }
 
+// incomplete fetch (without XHR), low quality...
 func biliAudioGetter(c *gin.Context) {
-	BV := c.Query("BV")
+	BV := c.Query("bv")
 	bitrate := c.Query("bitrate")
 	oFormat := c.DefaultQuery("format", "mp3")
 	// check BV, if malformed raise exception
@@ -65,7 +67,7 @@ func biliAudioGetter(c *gin.Context) {
 		return
 	}
 
-	// fmt.Println(matches[1])
+	fmt.Println(matches[1])
 
 	res, err := http.Get(matches[1])
 	if err != nil {
