@@ -28,7 +28,7 @@ func biliAudioGetter(c *gin.Context) {
 		return
 	}
 	bitrate := c.Query("bitrate")
-	oFormat := c.DefaultQuery("format", "mp3")
+	oFormat := c.Query("format")
 	playlistUrl := fmt.Sprintf("https://api.bilibili.com/x/player/pagelist?bvid=%s", BV) // check BV, if malformed raise exception
 
 	/* get cid from video page */
@@ -128,10 +128,17 @@ func biliAudioGetter(c *gin.Context) {
 	oBuffer := bytes.NewBuffer(nil)
 
 	/* format conversion with ffmpeg */
-	if bitrate == "" {
-		oKwargs = ffmpeg_go.KwArgs{"f": oFormat, "acodec": "libmp3lame"}
+	if bitrate == "" && oFormat == "" {
+		oKwargs = ffmpeg_go.KwArgs{"f": "adts", "acodec": "copy"}
+	} else if bitrate != "" && oFormat == "" {
+		oKwargs = ffmpeg_go.KwArgs{"f": "adts", "acodec": "copy", "b:a": bitrate}
+	} else if bitrate == "" && oFormat == "mp3" {
+		oKwargs = ffmpeg_go.KwArgs{"f": "mp3", "acodec": "libmp3lame"}
+	} else if bitrate != "" && oFormat == "mp3" {
+		oKwargs = ffmpeg_go.KwArgs{"f": "mp3", "acodec": "libmp3lame", "b:a": bitrate}
 	} else {
-		oKwargs = ffmpeg_go.KwArgs{"f": oFormat, "acodec": "libmp3lame", "b:a": bitrate}
+		c.JSON(http.StatusForbidden, gin.H{"msg": "Illegal or unsupported setting"})
+		return
 	}
 	err = ffmpeg_go.
 		Input("pipe:", ffmpeg_go.KwArgs{"f": "mp4"}).
