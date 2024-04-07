@@ -12,26 +12,13 @@ import (
 	ffmpeg_go "github.com/u2takey/ffmpeg-go"
 )
 
-func estimateBitrate(audio []byte, duration float64) int {
-	size := len(audio)
-	bytesPerSecond := float64(size) / duration
-	bitrateKbps := int(bytesPerSecond * 8 / 1024)
-	minBitrateKbps, maxBitrateKbps := 48, 640
-	if bitrateKbps < minBitrateKbps {
-		bitrateKbps = minBitrateKbps
-	} else if bitrateKbps > maxBitrateKbps {
-		bitrateKbps = maxBitrateKbps
-	}
-	return bitrateKbps
-}
-
 func biliAudioGetter(c *gin.Context) {
 	/* initialize global vars */
 	var JSON map[string]interface{}
-	var duration float64
 	var cid string
 	var maxBandwidth float64
 	var aUrl string
+	var oKwargs ffmpeg_go.KwArgs
 
 	/* query url params */
 	BV := c.Query("bv")
@@ -66,9 +53,6 @@ func biliAudioGetter(c *gin.Context) {
 			return
 		}
 		if pageMeta, ok := pages[page-1].(map[string]interface{}); ok {
-			if pageDuration, ok := pageMeta["duration"].(float64); ok {
-				duration = pageDuration
-			}
 			if pageCid, ok := pageMeta["cid"].(float64); ok {
 				cid = strconv.FormatFloat(pageCid, 'f', 0, 64)
 			}
@@ -143,15 +127,15 @@ func biliAudioGetter(c *gin.Context) {
 	iBuffer := bytes.NewBuffer(audio)
 	oBuffer := bytes.NewBuffer(nil)
 
-	/* estimate bitrate */
-	if bitrate == "" {
-		bitrate = fmt.Sprint(estimateBitrate(audio, float64(duration)))
-	}
-
 	/* format conversion with ffmpeg */
+	if bitrate == "" {
+		oKwargs = ffmpeg_go.KwArgs{"f": oFormat, "acodec": "libmp3lame"}
+	} else {
+		oKwargs = ffmpeg_go.KwArgs{"f": oFormat, "acodec": "libmp3lame", "b:a": bitrate}
+	}
 	err = ffmpeg_go.
 		Input("pipe:", ffmpeg_go.KwArgs{"f": "mp4"}).
-		Output("pipe:", ffmpeg_go.KwArgs{"f": oFormat, "acodec": "libmp3lame", "b:a": bitrate}).
+		Output("pipe:", oKwargs).
 		WithInput(iBuffer).
 		WithOutput(oBuffer).
 		Run()
