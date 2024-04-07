@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -29,7 +30,6 @@ func biliAudioGetter(c *gin.Context) {
 	}
 	bitrate := c.Query("bitrate")
 	oFormat := c.Query("format")
-	playlistUrl := fmt.Sprintf("https://api.bilibili.com/x/player/pagelist?bvid=%s", BV) // check BV, if malformed raise exception
 
 	/* check params bitrate */
 	if bitrate != "" {
@@ -41,8 +41,13 @@ func biliAudioGetter(c *gin.Context) {
 			return
 		}
 	}
+	if matched, err := regexp.MatchString("^BV\\w+$", BV); !matched || err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"msg": "Parameter 'bv' malformed"})
+		return
+	}
 
 	/* get cid from video page */
+	playlistUrl := fmt.Sprintf("https://api.bilibili.com/x/player/pagelist?bvid=%s", BV)
 	bvPage, err := http.Get(playlistUrl)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to load video page"})
@@ -158,7 +163,7 @@ func biliAudioGetter(c *gin.Context) {
 		WithOutput(oBuffer).
 		Run()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to convert audio"})
+		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to encode audio"})
 		return
 	}
 
