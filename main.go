@@ -9,63 +9,57 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/gin-gonic/gin"
 	ffmpeg_go "github.com/u2takey/ffmpeg-go"
 )
 
-func biliAudioGetter(c *gin.Context) {
-	/* initialize global vars */
+func biliAudioGetter(w http.ResponseWriter, r *http.Request) {
 	var JSON map[string]interface{}
 	var cid string
 	var maxBandwidth float64
 	var aUrl string
 	var oKwargs ffmpeg_go.KwArgs
 
-	/* query url params */
-	BV := c.Query("bv")
-	page, err := strconv.Atoi(c.DefaultQuery("p", "1"))
+	BV := r.URL.Query().Get("bv")
+	page, err := strconv.Atoi(r.URL.Query().Get("p"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid query parameter 'p'"})
-		return
+		page = 1
 	}
-	bitrate := c.Query("bitrate")
-	oFormat := c.Query("format")
+	bitrate := r.URL.Query().Get("bitrate")
+	oFormat := r.URL.Query().Get("format")
 
-	/* check params bitrate */
 	if bitrate != "" {
 		if num, err := strconv.Atoi(bitrate); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"msg": "Parameter 'bitrate' malformed"})
+			http.Error(w, `{"msg": "Parameter 'bitrate' malformed"}`, http.StatusBadRequest)
 			return
 		} else if num > 320 {
-			c.JSON(http.StatusForbidden, gin.H{"msg": "Reject transcoding with bitrate over 320k"})
+			http.Error(w, `{"msg": "Reject transcoding with bitrate over 320k"}`, http.StatusForbidden)
 			return
 		}
 	}
 	if matched, err := regexp.MatchString("^BV\\w+$", BV); !matched || len(BV) != 12 || err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"msg": "Parameter 'bv' malformed"})
+		http.Error(w, `{"msg": "Parameter 'bv' malformed"}`, http.StatusBadRequest)
 		return
 	}
 
-	/* get cid from video page */
 	playlistUrl := fmt.Sprintf("https://api.bilibili.com/x/player/pagelist?bvid=%s", BV)
 	bvPage, err := http.Get(playlistUrl)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to load video page"})
+		http.Error(w, `{"msg": "Failed to load video page"}`, http.StatusInternalServerError)
 		return
 	}
 	defer bvPage.Body.Close()
 	bvByte, err := io.ReadAll(bvPage.Body)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to read playlist-meta page body"})
+		http.Error(w, `{"msg": "Failed to read playlist-meta page body"}`, http.StatusInternalServerError)
 		return
 	}
 	if err := json.Unmarshal(bvByte, &JSON); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to parse playlist-meta JSON data"})
+		http.Error(w, `{"msg": "Failed to parse playlist-meta JSON data"}`, http.StatusInternalServerError)
 		return
 	}
 	if pages, ok := JSON["data"].([]interface{}); ok {
 		if page > len(pages) {
-			c.JSON(http.StatusNotFound, gin.H{"msg": "The 'p' you are looking for does not exist (exceeded upper bound)"})
+			http.Error(w, `{"msg": "The 'p' you are looking for does not exist (exceeded upper bound)"}`, http.StatusNotFound)
 			return
 		}
 		if pageMeta, ok := pages[page-1].(map[string]interface{}); ok {
@@ -75,38 +69,29 @@ func biliAudioGetter(c *gin.Context) {
 		}
 	}
 	if cid == "" {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "'cid' not found"})
+		http.Error(w, `{"msg": "'cid' not found"}`, http.StatusInternalServerError)
 		return
 	}
 
-	/* get page video meta from api.bilibili */
 	pageMetaUrl := fmt.Sprintf(
 		"https://api.bilibili.com/x/player/playurl?fnval=80&cid=%s&bvid=%s", cid, BV)
 	metaPage, err := http.Get(pageMetaUrl)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to load api page"})
+		http.Error(w, `{"msg": "Failed to load api page"}`, http.StatusInternalServerError)
 		return
 	}
 	defer metaPage.Body.Close()
 	apiByte, err := io.ReadAll(metaPage.Body)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to read page-meta page body"})
+		http.Error(w, `{"msg": "Failed to read page-meta page body"}`, http.StatusInternalServerError)
 		return
 	}
 	if err := json.Unmarshal(apiByte, &JSON); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to parse page-meta JSON data"})
+		http.Error(w, `{"msg": "Failed to parse page-meta JSON data"}`, http.StatusInternalServerError)
 		return
 	}
 	if data, ok := JSON["data"].(map[string]interface{}); ok {
 		if dash, ok := data["dash"].(map[string]interface{}); ok {
-			/* Login required */
-			// if flac, ok := dash["flac"].(map[string]interface{}); ok {
-			// 	if audioMeta, ok := flac["audio"].(map[string]interface{}); ok {
-			// 		if baseUrl, ok := audioMeta["baseUrl"].(string); ok {
-			// 			aUrl = baseUrl
-			// 		}
-			// 	}
-			// } else
 			if audioList, ok := dash["audio"].([]interface{}); ok {
 				for _, v := range audioList {
 					if audioMeta, ok := v.(map[string]interface{}); ok {
@@ -124,26 +109,24 @@ func biliAudioGetter(c *gin.Context) {
 		}
 	}
 	if aUrl == "" {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Resource Url not found"})
+		http.Error(w, `{"msg": "Resource Url not found"}`, http.StatusInternalServerError)
 		return
 	}
 
-	/* fetch audio from upos-hz-mirrorakam.akamaized.net */
 	res, err := http.Get(aUrl)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to fetch from resource"})
+		http.Error(w, `{"msg": "Failed to fetch from resource"}`, http.StatusInternalServerError)
 		return
 	}
 	defer res.Body.Close()
 	audio, err := io.ReadAll(res.Body)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to read audio data"})
+		http.Error(w, `{"msg": "Failed to read audio data"}`, http.StatusInternalServerError)
 		return
 	}
 	iBuffer := bytes.NewBuffer(audio)
 	oBuffer := bytes.NewBuffer(nil)
 
-	/* format conversion with ffmpeg */
 	if bitrate == "" && oFormat == "" {
 		oKwargs = ffmpeg_go.KwArgs{"f": "adts", "acodec": "copy"}
 	} else if bitrate != "" && oFormat == "" {
@@ -153,7 +136,7 @@ func biliAudioGetter(c *gin.Context) {
 	} else if bitrate != "" && oFormat == "mp3" {
 		oKwargs = ffmpeg_go.KwArgs{"f": "mp3", "acodec": "libmp3lame", "b:a": bitrate}
 	} else {
-		c.JSON(http.StatusBadRequest, gin.H{"msg": "Illegal or unsupported setting"})
+		http.Error(w, `{"msg": "Illegal or unsupported setting"}`, http.StatusBadRequest)
 		return
 	}
 	err = ffmpeg_go.
@@ -163,28 +146,24 @@ func biliAudioGetter(c *gin.Context) {
 		WithOutput(oBuffer).
 		Run()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to encode audio"})
+		http.Error(w, `{"msg": "Failed to encode audio"}`, http.StatusInternalServerError)
 		return
 	}
 
-	/* send converted to client for download */
 	if oFormat == "" {
 		oFormat = "aac"
 	}
-	c.Header("Content-Type", "audio/mpeg")
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=audio.%s", oFormat))
-	_, err = c.Writer.Write(oBuffer.Bytes())
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=audio.%s", oFormat))
+	_, err = w.Write(oBuffer.Bytes())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "Failed to write response"})
+		http.Error(w, `{"msg": "Failed to write response"}`, http.StatusInternalServerError)
 		return
 	}
 }
 
 func main() {
-	r := gin.Default()
-	r.SetTrustedProxies(nil)
-
-	r.GET("/", biliAudioGetter)
-
-	r.Run(":8081")
+	http.HandleFunc("/", biliAudioGetter)
+	fmt.Println("BiliAudioGetter is currently running at :8081")
+	http.ListenAndServe(":8081", nil)
 }
