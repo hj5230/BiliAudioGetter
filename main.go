@@ -41,7 +41,7 @@ func biliAudioGetter(c *gin.Context) {
 			return
 		}
 	}
-	if matched, err := regexp.MatchString("^BV\\w+$", BV); !matched || err != nil {
+	if matched, err := regexp.MatchString("^BV\\w+$", BV); !matched || len(BV) != 12 || err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"msg": "Parameter 'bv' malformed"})
 		return
 	}
