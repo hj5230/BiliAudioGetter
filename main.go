@@ -31,6 +31,17 @@ func biliAudioGetter(c *gin.Context) {
 	oFormat := c.Query("format")
 	playlistUrl := fmt.Sprintf("https://api.bilibili.com/x/player/pagelist?bvid=%s", BV) // check BV, if malformed raise exception
 
+	/* check params bitrate */
+	if bitrate != "" {
+		if num, err := strconv.Atoi(bitrate); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"msg": "Parameter 'bitrate' malformed"})
+			return
+		} else if num > 320 {
+			c.JSON(http.StatusForbidden, gin.H{"msg": "Reject transcoding with bitrate over 320k"})
+			return
+		}
+	}
+
 	/* get cid from video page */
 	bvPage, err := http.Get(playlistUrl)
 	if err != nil {
@@ -83,7 +94,7 @@ func biliAudioGetter(c *gin.Context) {
 	}
 	if data, ok := JSON["data"].(map[string]interface{}); ok {
 		if dash, ok := data["dash"].(map[string]interface{}); ok {
-			// Login required
+			/* Login required */
 			// if flac, ok := dash["flac"].(map[string]interface{}); ok {
 			// 	if audioMeta, ok := flac["audio"].(map[string]interface{}); ok {
 			// 		if baseUrl, ok := audioMeta["baseUrl"].(string); ok {
@@ -137,7 +148,7 @@ func biliAudioGetter(c *gin.Context) {
 	} else if bitrate != "" && oFormat == "mp3" {
 		oKwargs = ffmpeg_go.KwArgs{"f": "mp3", "acodec": "libmp3lame", "b:a": bitrate}
 	} else {
-		c.JSON(http.StatusForbidden, gin.H{"msg": "Illegal or unsupported setting"})
+		c.JSON(http.StatusBadRequest, gin.H{"msg": "Illegal or unsupported setting"})
 		return
 	}
 	err = ffmpeg_go.
@@ -152,6 +163,9 @@ func biliAudioGetter(c *gin.Context) {
 	}
 
 	/* send converted to client for download */
+	if oFormat == "" {
+		oFormat = "aac"
+	}
 	c.Header("Content-Type", "audio/mpeg")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=audio.%s", oFormat))
 	_, err = c.Writer.Write(oBuffer.Bytes())
