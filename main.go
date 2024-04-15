@@ -114,7 +114,7 @@ func apiGetter(w http.ResponseWriter, r *http.Request) {
 	/* get meta page url */
 	pageMetaUrl, err := getPageMetaUrl(BV, page)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
@@ -160,7 +160,7 @@ func audioGetter(w http.ResponseWriter, r *http.Request) {
 	/* get meta page url */
 	pageMetaUrl, err := getPageMetaUrl(BV, page)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
@@ -235,6 +235,45 @@ func audioGetter(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func flacUrlParser(w http.ResponseWriter, r *http.Request) {
+	/* initialize global vars */
+	var JSON map[string]interface{}
+	var flacUrl string
+
+	/* query url params */
+	jsonData := []byte(r.URL.Query().Get("json"))
+
+	/* parse json object */
+	if err := json.Unmarshal(jsonData, &JSON); err != nil {
+		http.Error(w, `{"msg": "failed to parse flac JSON data"}`, http.StatusBadRequest)
+		return
+	}
+
+	/* get Hi-res audio url */
+	if data, ok := JSON["data"].(map[string]interface{}); ok {
+		if dash, ok := data["dash"].(map[string]interface{}); ok {
+			if flac, ok := dash["flac"].(map[string]interface{}); ok {
+				if audioMeta, ok := flac["audio"].(map[string]interface{}); ok {
+					if baseUrl, ok := audioMeta["baseUrl"].(string); ok {
+						flacUrl = baseUrl
+					}
+				}
+			}
+		}
+	}
+	if flacUrl == "" {
+		http.Error(w, `{"msg": "resource Url not found"}`, http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, err := w.Write([]byte(fmt.Sprintf(`{"url": "%s"}`, flacUrl)))
+	if err != nil {
+		http.Error(w, `{"msg": "failed to write response"}`, http.StatusInternalServerError)
+		return
+	}
+}
+
 func sourceGetter(w http.ResponseWriter, r *http.Request) {
 	/* query url params */
 	source := r.URL.Query().Get("source")
@@ -271,6 +310,7 @@ func sourceGetter(w http.ResponseWriter, r *http.Request) {
 func main() {
 	http.HandleFunc("/", audioGetter)
 	http.HandleFunc("/api/", apiGetter)
+	http.HandleFunc("/flacurlparser/", flacUrlParser)
 	http.HandleFunc("/fromsource/", sourceGetter)
 	fmt.Println("BiliAudioGetter is currently running at :8081")
 	http.ListenAndServe(":8081", nil)
