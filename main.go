@@ -92,6 +92,14 @@ func biliAudioGetter(w http.ResponseWriter, r *http.Request) {
 	}
 	if data, ok := JSON["data"].(map[string]interface{}); ok {
 		if dash, ok := data["dash"].(map[string]interface{}); ok {
+			// Login & VIP required
+			// if flac, ok := dash["flac"].(map[string]interface{}); ok {
+			// 	if audioMeta, ok := flac["audio"].(map[string]interface{}); ok {
+			// 		if baseUrl, ok := audioMeta["baseUrl"].(string); ok {
+			// 			aUrl = baseUrl
+			// 		}
+			// 	}
+			// } else
 			if audioList, ok := dash["audio"].([]interface{}); ok {
 				for _, v := range audioList {
 					if audioMeta, ok := v.(map[string]interface{}); ok {
