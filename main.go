@@ -226,6 +226,9 @@ func audioGetter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	/* send converted to client for download */
+	if oFormat == "" {
+		oFormat = "aac"
+	}
 	w.Header().Set("Content-Type", "audio/mpeg")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=audio.%s", oFormat))
 	_, err = w.Write(convertedAudio)
