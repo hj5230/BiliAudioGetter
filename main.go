@@ -51,12 +51,87 @@ func getPageMetaUrl(BV string, page int) (string, error) {
 	return pageMetaUrl, nil
 }
 
+func fetchAudio(aUrl string) ([]byte, error) {
+	res, err := http.Get(aUrl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch from resource")
+	}
+	defer res.Body.Close()
+	audio, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read audio data")
+	}
+	return audio, nil
+}
+
+func convertAudio(audio []byte, bitrate, oFormat string) ([]byte, error) {
+	/* initialize buffers */
+	iBuffer := bytes.NewBuffer(audio)
+	oBuffer := bytes.NewBuffer(nil)
+
+	/* parse bitrate & format settings */
+	var oKwargs ffmpeg_go.KwArgs
+	if bitrate == "" && oFormat == "" {
+		oKwargs = ffmpeg_go.KwArgs{"f": "adts", "acodec": "copy"}
+	} else if bitrate != "" && oFormat == "" {
+		oKwargs = ffmpeg_go.KwArgs{"f": "adts", "acodec": "copy", "b:a": bitrate}
+	} else if bitrate == "" && oFormat == "mp3" {
+		oKwargs = ffmpeg_go.KwArgs{"f": "mp3", "acodec": "libmp3lame"}
+	} else if bitrate != "" && oFormat == "mp3" {
+		oKwargs = ffmpeg_go.KwArgs{"f": "mp3", "acodec": "libmp3lame", "b:a": bitrate}
+	} else {
+		return nil, fmt.Errorf("illegal or unsupported setting")
+	}
+
+	/* convert audio with ffmpeg */
+	err := ffmpeg_go.
+		Input("pipe:", ffmpeg_go.KwArgs{"f": "mp4"}).
+		Output("pipe:", oKwargs).
+		WithInput(iBuffer).
+		WithOutput(oBuffer).
+		Run()
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode audio")
+	}
+
+	return oBuffer.Bytes(), nil
+}
+
+func apiGetter(w http.ResponseWriter, r *http.Request) {
+	/* query url params */
+	BV := r.URL.Query().Get("bv")
+	page, err := strconv.Atoi(r.URL.Query().Get("p"))
+	if err != nil {
+		page = 1
+	}
+
+	/* check if BV malformed */
+	if matched, err := regexp.MatchString("", BV); !matched || len(BV) != 12 || err != nil {
+		http.Error(w, `{"msg": "parameter 'bv' malformed"}`, http.StatusBadRequest)
+		return
+	}
+
+	/* get meta page url */
+	pageMetaUrl, err := getPageMetaUrl(BV, page)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	/* send api url to client */
+	w.Header().Set("Content-Type", "application/json")
+	_, err = w.Write([]byte(fmt.Sprintf(`{"url": "%s"}`, pageMetaUrl)))
+	if err != nil {
+		http.Error(w, `{"msg": "failed to write response"}`, http.StatusInternalServerError)
+		return
+	}
+}
+
 func audioGetter(w http.ResponseWriter, r *http.Request) {
 	/* initialize global vars */
 	var JSON map[string]interface{}
 	var maxBandwidth float64
 	var aUrl string
-	var oKwargs ffmpeg_go.KwArgs
 
 	/* query url params */
 	BV := r.URL.Query().Get("bv")
@@ -70,15 +145,15 @@ func audioGetter(w http.ResponseWriter, r *http.Request) {
 	/* check params bitrate */
 	if bitrate != "" {
 		if num, err := strconv.Atoi(bitrate); err != nil {
-			http.Error(w, `{"msg": "Parameter 'bitrate' malformed"}`, http.StatusBadRequest)
+			http.Error(w, `{"msg": "parameter 'bitrate' malformed"}`, http.StatusBadRequest)
 			return
 		} else if num > 320 {
-			http.Error(w, `{"msg": "Reject transcoding with bitrate over 320k"}`, http.StatusForbidden)
+			http.Error(w, `{"msg": "reject transcoding with bitrate over 320k"}`, http.StatusForbidden)
 			return
 		}
 	}
 	if matched, err := regexp.MatchString("^BV\\w+$", BV); !matched || len(BV) != 12 || err != nil {
-		http.Error(w, `{"msg": "Parameter 'bv' malformed"}`, http.StatusBadRequest)
+		http.Error(w, `{"msg": "parameter 'bv' malformed"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -92,17 +167,17 @@ func audioGetter(w http.ResponseWriter, r *http.Request) {
 	/* get page video meta from api.bilibili */
 	metaPage, err := http.Get(pageMetaUrl)
 	if err != nil {
-		http.Error(w, `{"msg": "Failed to load api page"}`, http.StatusInternalServerError)
+		http.Error(w, `{"msg": "failed to load api page"}`, http.StatusInternalServerError)
 		return
 	}
 	defer metaPage.Body.Close()
 	apiByte, err := io.ReadAll(metaPage.Body)
 	if err != nil {
-		http.Error(w, `{"msg": "Failed to read page-meta page body"}`, http.StatusInternalServerError)
+		http.Error(w, `{"msg": "failed to read page-meta page body"}`, http.StatusInternalServerError)
 		return
 	}
 	if err := json.Unmarshal(apiByte, &JSON); err != nil {
-		http.Error(w, `{"msg": "Failed to parse page-meta JSON data"}`, http.StatusInternalServerError)
+		http.Error(w, `{"msg": "failed to parse page-meta JSON data"}`, http.StatusInternalServerError)
 		return
 	}
 	if data, ok := JSON["data"].(map[string]interface{}); ok {
@@ -132,46 +207,51 @@ func audioGetter(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if aUrl == "" {
-		http.Error(w, `{"msg": "Resource Url not found"}`, http.StatusInternalServerError)
+		http.Error(w, `{"msg": "resource Url not found"}`, http.StatusInternalServerError)
 		return
 	}
 
 	/* fetch audio from upos-hz-mirrorakam.akamaized.net */
-	res, err := http.Get(aUrl)
+	audio, err := fetchAudio(aUrl)
 	if err != nil {
-		http.Error(w, `{"msg": "Failed to fetch from resource"}`, http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	defer res.Body.Close()
-	audio, err := io.ReadAll(res.Body)
-	if err != nil {
-		http.Error(w, `{"msg": "Failed to read audio data"}`, http.StatusInternalServerError)
-		return
-	}
-	iBuffer := bytes.NewBuffer(audio)
-	oBuffer := bytes.NewBuffer(nil)
 
 	/* format conversion with ffmpeg */
-	if bitrate == "" && oFormat == "" {
-		oKwargs = ffmpeg_go.KwArgs{"f": "adts", "acodec": "copy"}
-	} else if bitrate != "" && oFormat == "" {
-		oKwargs = ffmpeg_go.KwArgs{"f": "adts", "acodec": "copy", "b:a": bitrate}
-	} else if bitrate == "" && oFormat == "mp3" {
-		oKwargs = ffmpeg_go.KwArgs{"f": "mp3", "acodec": "libmp3lame"}
-	} else if bitrate != "" && oFormat == "mp3" {
-		oKwargs = ffmpeg_go.KwArgs{"f": "mp3", "acodec": "libmp3lame", "b:a": bitrate}
-	} else {
-		http.Error(w, `{"msg": "Illegal or unsupported setting"}`, http.StatusBadRequest)
+	convertedAudio, err := convertAudio(audio, bitrate, oFormat)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
-	err = ffmpeg_go.
-		Input("pipe:", ffmpeg_go.KwArgs{"f": "mp4"}).
-		Output("pipe:", oKwargs).
-		WithInput(iBuffer).
-		WithOutput(oBuffer).
-		Run()
+
+	/* send converted to client for download */
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=audio.%s", oFormat))
+	_, err = w.Write(convertedAudio)
 	if err != nil {
-		http.Error(w, `{"msg": "Failed to encode audio"}`, http.StatusInternalServerError)
+		http.Error(w, `{"msg": "failed to write response"}`, http.StatusInternalServerError)
+		return
+	}
+}
+
+func sourceGetter(w http.ResponseWriter, r *http.Request) {
+	/* query url params */
+	source := r.URL.Query().Get("source")
+	bitrate := r.URL.Query().Get("bitrate")
+	oFormat := r.URL.Query().Get("format")
+
+	/* fetch audio with source url */
+	audio, err := fetchAudio(source)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	/* convert audio with ffmpeg */
+	convertedAudio, err := convertAudio(audio, bitrate, oFormat)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
@@ -181,39 +261,9 @@ func audioGetter(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "audio/mpeg")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=audio.%s", oFormat))
-	_, err = w.Write(oBuffer.Bytes())
+	_, err = w.Write(convertedAudio)
 	if err != nil {
-		http.Error(w, `{"msg": "Failed to write response"}`, http.StatusInternalServerError)
-		return
-	}
-}
-
-func apiGetter(w http.ResponseWriter, r *http.Request) {
-	/* query url params */
-	BV := r.URL.Query().Get("bv")
-	page, err := strconv.Atoi(r.URL.Query().Get("p"))
-	if err != nil {
-		page = 1
-	}
-
-	/* check if BV malformed */
-	if matched, err := regexp.MatchString("", BV); !matched || len(BV) != 12 || err != nil {
-		http.Error(w, `{"msg": "Parameter 'bv' malformed"}`, http.StatusBadRequest)
-		return
-	}
-
-	/* get meta page url */
-	pageMetaUrl, err := getPageMetaUrl(BV, page)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusInternalServerError)
-		return
-	}
-
-	/* send api url to client */
-	w.Header().Set("Content-Type", "application/json")
-	_, err = w.Write([]byte(fmt.Sprintf(`{"url": "%s"}`, pageMetaUrl)))
-	if err != nil {
-		http.Error(w, `{"msg": "Failed to write response"}`, http.StatusInternalServerError)
+		http.Error(w, `{"msg": "failed to write response"}`, http.StatusInternalServerError)
 		return
 	}
 }
@@ -221,6 +271,7 @@ func apiGetter(w http.ResponseWriter, r *http.Request) {
 func main() {
 	http.HandleFunc("/", audioGetter)
 	http.HandleFunc("/api/", apiGetter)
+	http.HandleFunc("/fromsource/", sourceGetter)
 	fmt.Println("BiliAudioGetter is currently running at :8081")
 	http.ListenAndServe(":8081", nil)
 }
