@@ -12,9 +12,44 @@ import (
 	ffmpeg_go "github.com/u2takey/ffmpeg-go"
 )
 
-func biliAudioGetter(w http.ResponseWriter, r *http.Request) {
+func getPageMetaUrl(BV string, page int) (string, error) {
 	var JSON map[string]interface{}
 	var cid string
+
+	playlistUrl := fmt.Sprintf("https://api.bilibili.com/x/player/pagelist?bvid=%s", BV)
+	bvPage, err := http.Get(playlistUrl)
+	if err != nil {
+		return "", err
+	}
+	defer bvPage.Body.Close()
+	bvByte, err := io.ReadAll(bvPage.Body)
+	if err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(bvByte, &JSON); err != nil {
+		return "", err
+	}
+	if pages, ok := JSON["data"].([]interface{}); ok {
+		if page > len(pages) {
+			return "", fmt.Errorf("'p' you are looking for does not exist (exceeded upper bound)")
+		}
+		if pageMeta, ok := pages[page-1].(map[string]interface{}); ok {
+			if pageCid, ok := pageMeta["cid"].(float64); ok {
+				cid = strconv.FormatFloat(pageCid, 'f', 0, 64)
+			}
+		}
+	}
+	if cid == "" {
+		return "", fmt.Errorf("'cid' not found")
+	}
+
+	pageMetaUrl := fmt.Sprintf(
+		"https://api.bilibili.com/x/player/playurl?fnval=80&cid=%s&bvid=%s", cid, BV)
+	return pageMetaUrl, nil
+}
+
+func audioGetter(w http.ResponseWriter, r *http.Request) {
+	var JSON map[string]interface{}
 	var maxBandwidth float64
 	var aUrl string
 	var oKwargs ffmpeg_go.KwArgs
@@ -41,40 +76,12 @@ func biliAudioGetter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	playlistUrl := fmt.Sprintf("https://api.bilibili.com/x/player/pagelist?bvid=%s", BV)
-	bvPage, err := http.Get(playlistUrl)
+	pageMetaUrl, err := getPageMetaUrl(BV, page)
 	if err != nil {
-		http.Error(w, `{"msg": "Failed to load video page"}`, http.StatusInternalServerError)
-		return
-	}
-	defer bvPage.Body.Close()
-	bvByte, err := io.ReadAll(bvPage.Body)
-	if err != nil {
-		http.Error(w, `{"msg": "Failed to read playlist-meta page body"}`, http.StatusInternalServerError)
-		return
-	}
-	if err := json.Unmarshal(bvByte, &JSON); err != nil {
-		http.Error(w, `{"msg": "Failed to parse playlist-meta JSON data"}`, http.StatusInternalServerError)
-		return
-	}
-	if pages, ok := JSON["data"].([]interface{}); ok {
-		if page > len(pages) {
-			http.Error(w, `{"msg": "The 'p' you are looking for does not exist (exceeded upper bound)"}`, http.StatusNotFound)
-			return
-		}
-		if pageMeta, ok := pages[page-1].(map[string]interface{}); ok {
-			if pageCid, ok := pageMeta["cid"].(float64); ok {
-				cid = strconv.FormatFloat(pageCid, 'f', 0, 64)
-			}
-		}
-	}
-	if cid == "" {
-		http.Error(w, `{"msg": "'cid' not found"}`, http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
 
-	pageMetaUrl := fmt.Sprintf(
-		"https://api.bilibili.com/x/player/playurl?fnval=80&cid=%s&bvid=%s", cid, BV)
 	metaPage, err := http.Get(pageMetaUrl)
 	if err != nil {
 		http.Error(w, `{"msg": "Failed to load api page"}`, http.StatusInternalServerError)
@@ -170,8 +177,35 @@ func biliAudioGetter(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func apiGetter(w http.ResponseWriter, r *http.Request) {
+	BV := r.URL.Query().Get("bv")
+	page, err := strconv.Atoi(r.URL.Query().Get("p"))
+	if err != nil {
+		page = 1
+	}
+
+	if matched, err := regexp.MatchString("", BV); !matched || len(BV) != 12 || err != nil {
+		http.Error(w, `{"msg": "Parameter 'bv' malformed"}`, http.StatusBadRequest)
+		return
+	}
+
+	pageMetaUrl, err := getPageMetaUrl(BV, page)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, err = w.Write([]byte(fmt.Sprintf(`{"url": "%s"}`, pageMetaUrl)))
+	if err != nil {
+		http.Error(w, `{"msg": "Failed to write response"}`, http.StatusInternalServerError)
+		return
+	}
+}
+
 func main() {
-	http.HandleFunc("/", biliAudioGetter)
+	http.HandleFunc("/", audioGetter)
+	http.HandleFunc("/api/", apiGetter)
 	fmt.Println("BiliAudioGetter is currently running at :8081")
 	http.ListenAndServe(":8081", nil)
 }
