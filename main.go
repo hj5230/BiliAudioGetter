@@ -274,33 +274,38 @@ func flacUrlParser(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func sourceGetter(w http.ResponseWriter, r *http.Request) {
-	/* query url params */
+func flacGetter(w http.ResponseWriter, r *http.Request) {
+	/* query url params and concat */
 	source := r.URL.Query().Get("source")
-	bitrate := r.URL.Query().Get("bitrate")
-	oFormat := r.URL.Query().Get("format")
+	hdnts := r.URL.Query().Get("hdnts")
+	source = fmt.Sprintf("%s&hdnts=%s", source, hdnts)
 
 	/* fetch audio with source url */
 	audio, err := fetchAudio(source)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusInternalServerError)
-		return
-	}
-
-	/* convert audio with ffmpeg */
-	convertedAudio, err := convertAudio(audio, bitrate, oFormat)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
-	/* send converted to client for download */
-	if oFormat == "" {
-		oFormat = "aac"
+	iBuffer := bytes.NewBuffer(audio)
+	oBuffer := bytes.NewBuffer(nil)
+
+	/* convert audio with ffmpeg */
+	err = ffmpeg_go.
+		Input("pipe:", ffmpeg_go.KwArgs{"f": "mp4"}).
+		Output("pipe:", ffmpeg_go.KwArgs{"f": "flac", "acodec": "copy"}).
+		WithInput(iBuffer).
+		WithOutput(oBuffer).
+		Run()
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusInternalServerError)
+		return
 	}
+
+	/* send converted to client for download */
 	w.Header().Set("Content-Type", "audio/mpeg")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=audio.%s", oFormat))
-	_, err = w.Write(convertedAudio)
+	w.Header().Set("Content-Disposition", "attachment; filename=audio.flac")
+	_, err = w.Write(oBuffer.Bytes())
 	if err != nil {
 		http.Error(w, `{"msg": "failed to write response"}`, http.StatusInternalServerError)
 		return
@@ -311,7 +316,7 @@ func main() {
 	http.HandleFunc("/", audioGetter)
 	http.HandleFunc("/api/", apiGetter)
 	http.HandleFunc("/flacurlparser/", flacUrlParser)
-	http.HandleFunc("/fromsource/", sourceGetter)
+	http.HandleFunc("/flac/", flacGetter)
 	fmt.Println("BiliAudioGetter is currently running at :8081")
 	http.ListenAndServe(":8081", nil)
 }
